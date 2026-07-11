@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets and configuration
+.env
+.env.*
+*.pem
+*.key
+
+# Runtime state and research records
+sim_account.json
+research_state/*
+!research_state/.gitkeep
+*.log
+
+# Streamlit and data caches
+.streamlit/secrets.toml
+.cache/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/

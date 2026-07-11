@@ -1,0 +1,8 @@
+streamlit>=1.34
+pandas>=2.0
+numpy>=1.24
+plotly>=5.18
+baostock>=0.8.9
+easytrader>=0.23.0; platform_system == "Windows"
+akshare>=1.14.0
+efinance>=0.5.8
