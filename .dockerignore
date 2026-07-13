@@ -1,11 +1,9 @@
-__pycache__/
+.git
+.gitignore
+__pycache__
 *.py[cod]
 .DS_Store
-.env
-.venv/
-venv/
 .streamlit/secrets.toml
 research_state/*.json
 research_state/*.jsonl
 research_state/*.tmp
-!research_state/.gitkeep

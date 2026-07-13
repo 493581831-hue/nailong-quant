@@ -21,7 +21,7 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable, Optional
 
-from ..data_fetcher import get_stock_list, _fetch_kline
+from ..data_fetcher import get_value_stock_pool, _fetch_kline
 from ..indicators import MA, MACD, RSI, BOLL
 
 
@@ -298,7 +298,7 @@ def run_screener(
     lookback_days: int = 180,
 ) -> pd.DataFrame:
     """
-    全市场选股
+    在精选 500 基础池中执行信号选股。
 
     参数:
       conditions: 筛选条件列表, 如 ["均线金叉", "MACD金叉"]
@@ -316,12 +316,14 @@ def run_screener(
     if conditions is None:
         conditions = [k for k in SCREENER_STRATEGIES if not k.endswith("🔻")]
 
-    # 加载全部股票列表
-    all_stocks = get_stock_list()
+    # 中证 A500 为主的精选基础池，避免对 5,000+ 只标的盲扫。
+    all_stocks = get_value_stock_pool(limit=500)
     if all_stocks is None or len(all_stocks) == 0:
         return pd.DataFrame()
 
-    codes = all_stocks["code"].tolist()
+    codes = all_stocks["code"].astype(str).str.zfill(6).tolist()
+    name_map = dict(zip(codes, all_stocks["name"].astype(str)))
+    universe_attrs = dict(all_stocks.attrs)
     total = len(codes)
     results = []
 
@@ -359,8 +361,7 @@ def run_screener(
             comp_score = scoring["score"]
 
             # 获取股票名称
-            name_row = all_stocks[all_stocks["code"] == code]
-            name = name_row.iloc[0]["name"] if len(name_row) > 0 else ""
+            name = name_map.get(code, "")
 
             return {
                 "代码": code,
@@ -400,6 +401,7 @@ def run_screener(
     df_result = df_result.reset_index(drop=True)
     df_result.index = df_result.index + 1  # 序号从1开始
     df_result.index.name = "序号"
+    df_result.attrs.update(universe_attrs)
 
     return df_result
 
