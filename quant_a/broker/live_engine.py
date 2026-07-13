@@ -10,6 +10,7 @@ import threading
 import logging
 from datetime import datetime, time as dtime
 from typing import List, Callable, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -31,15 +32,20 @@ class LiveTradingEngine:
         check_interval: int = 60,
         max_position_pct: float = 0.25,
         trade_time_only: bool = True,
+        scan_batch_size: int = 120,
+        max_workers: int = 8,
     ):
         self.broker = broker
         self.strategy = strategy or MovingAverageCross(short=5, long=20)
-        self.stock_pool = stock_pool or ["600519"]
+        self.stock_pool = list(dict.fromkeys(stock_pool or ["600519"]))
         self.check_interval = check_interval
         self.max_position_pct = max_position_pct
         self.trade_time_only = trade_time_only
+        self.scan_batch_size = max(1, int(scan_batch_size))
+        self.max_workers = max(1, int(max_workers))
         self.is_running = False
         self._thread = None
+        self._cursor = 0
         self.signal_log = []
 
     def _is_trade_time(self) -> bool:
@@ -111,13 +117,48 @@ class LiveTradingEngine:
                     "status": order.status, "msg": order.msg,
                 })
 
+    def _next_batch(self) -> List[str]:
+        """Return a rotating slice so a large universe is covered without API bursts."""
+        total = len(self.stock_pool)
+        if total <= self.scan_batch_size:
+            return list(self.stock_pool)
+        start = self._cursor
+        end = start + self.scan_batch_size
+        if end <= total:
+            batch = self.stock_pool[start:end]
+        else:
+            batch = self.stock_pool[start:] + self.stock_pool[:end - total]
+        self._cursor = end % total
+        return batch
+
+    def _scan_codes(self, codes: List[str]) -> List[dict]:
+        """Fetch signals concurrently, then restore stable universe order."""
+        if not codes:
+            return []
+        workers = min(self.max_workers, len(codes))
+        by_code = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self._check_signals, code): code for code in codes}
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    by_code[code] = future.result()
+                except Exception as exc:
+                    by_code[code] = {"code": code, "signal": 0, "msg": f"异常: {exc}"}
+        return [by_code[code] for code in codes]
+
     def _run_loop(self, on_update: Callable = None):
         logger.info(f"自动交易引擎启动, 股票池: {self.stock_pool}")
         while self.is_running:
             try:
                 if self._is_trade_time():
-                    for code in self.stock_pool:
-                        sig = self._check_signals(code)
+                    batch = self._next_batch()
+                    logger.info(
+                        "轮转扫描 %s 只（全池 %s，只读行情并发 %s）",
+                        len(batch), len(self.stock_pool), self.max_workers,
+                    )
+                    for sig in self._scan_codes(batch):
+                        code = sig["code"]
                         logger.info(f"{code} 信号: {sig}")
                         if sig["signal"] != 0:
                             self._execute_signal(sig)
@@ -144,11 +185,11 @@ class LiveTradingEngine:
             self._thread.join(timeout=5)
         logger.info("引擎已停止")
 
-    def run_once(self, on_update: Callable = None) -> list:
+    def run_once(self, on_update: Callable = None, full_scan: bool = False) -> list:
         self.broker.connect()
         results = []
-        for code in self.stock_pool:
-            sig = self._check_signals(code)
+        codes = list(self.stock_pool) if full_scan else self._next_batch()
+        for sig in self._scan_codes(codes):
             if sig["signal"] != 0:
                 self._execute_signal(sig)
             results.append(sig)

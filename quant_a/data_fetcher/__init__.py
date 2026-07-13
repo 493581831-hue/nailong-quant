@@ -18,7 +18,9 @@ import time
 import random
 import numpy as np
 import urllib.request
+import urllib.parse
 import json
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple
 
@@ -122,10 +124,18 @@ def get_realtime_batch(codes: list, max_workers=6) -> dict:
 
 
 def check_network() -> bool:
-    """检测网络连通性 (Sina行情API)"""
+    """检测至少一条真实行情链路，避免把单一供应商故障误报为离线。"""
     try:
         result = _get_rt_sina('600519')
-        return bool(result and result.get('price', 0) > 0)
+        if result and result.get('price', 0) > 0:
+            return True
+        result = _get_rt_tencent('600519')
+        if result and result.get('price', 0) > 0:
+            return True
+        end = pd.Timestamp.today().normalize()
+        start = end - pd.Timedelta(days=20)
+        history = _fetch_tencent_kline('600519', start, end, 'qfq')
+        return history is not None and len(history) > 0
     except Exception:
         return False
 
@@ -144,20 +154,36 @@ def _fetch_tencent_kline(code, start_date=None, end_date=None, adjust="qfq", lim
         sc = _code_to_sc(code)
         adj_map = {'qfq': 'qfq', 'hfq': 'hfq', '': ''}
         adj_param = adj_map.get(adjust, 'qfq')
-        url = f'http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={sc},day,,,{limit},{adj_param}'
-        req = urllib.request.Request(url, headers=_TENCENT_HEADERS)
-        r = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(r.read())
+        # Tencent caps a single response at roughly 640 trading days. Split
+        # explicit history requests into two-calendar-year windows so an old
+        # start date is not silently truncated to the latest ~500 rows.
+        if start_date and end_date:
+            start_ts, end_ts = pd.Timestamp(start_date), pd.Timestamp(end_date)
+            requests_to_make = []
+            year = start_ts.year
+            while year <= end_ts.year:
+                chunk_start = max(start_ts, pd.Timestamp(year=year, month=1, day=1))
+                chunk_end = min(end_ts, pd.Timestamp(year=min(year + 1, end_ts.year), month=12, day=31))
+                requests_to_make.append((chunk_start.strftime('%Y-%m-%d'), chunk_end.strftime('%Y-%m-%d')))
+                year += 2
+        else:
+            requests_to_make = [(None, None)]
 
-        d = data.get('data', {})
-        stock_key = sc
-        if stock_key not in d:
-            for k in d:
-                stock_key = k
-                break
-        stock_data = d.get(stock_key, {})
-        kline_key = adj_param + 'day' if adj_param else 'day'
-        klines = stock_data.get(kline_key, stock_data.get('day', []))
+        klines = []
+        for chunk_start, chunk_end in requests_to_make:
+            if chunk_start:
+                param = f'{sc},day,{chunk_start},{chunk_end},640,{adj_param}'
+            else:
+                param = f'{sc},day,,,{limit},{adj_param}'
+            url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + urllib.parse.quote(param)
+            req = urllib.request.Request(url, headers=_TENCENT_HEADERS)
+            r = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(r.read())
+            d = data.get('data', {})
+            stock_key = sc if sc in d else next(iter(d), sc)
+            stock_data = d.get(stock_key, {})
+            kline_key = adj_param + 'day' if adj_param else 'day'
+            klines.extend(stock_data.get(kline_key, stock_data.get('day', [])))
         if not klines:
             return pd.DataFrame()
 
@@ -363,16 +389,201 @@ A_STOCK_LIST_MAIN = [
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_stock_list():
-    """获取A股股票列表"""
-    result = pd.DataFrame(A_STOCK_LIST_MAIN, columns=["code", "name"])
-    result = result.drop_duplicates(subset="code").reset_index(drop=True)
-    result["code"] = result["code"].astype(str).str.zfill(6)
-    return result
+    """获取当前可交易的沪深全市场 A 股，失败时明确降级到内置样本池。"""
+    try:
+        _ensure_bs_login()
+        rs = bs.query_stock_basic()
+        if rs is None or rs.error_code != "0":
+            raise RuntimeError("baostock 证券列表查询失败")
+        rows = []
+        while rs.next():
+            rows.append(rs.get_row_data())
+        raw = pd.DataFrame(rows, columns=rs.fields)
+        if raw.empty:
+            raise RuntimeError("baostock 返回空证券列表")
+
+        raw = raw[(raw["type"] == "1") & (raw["status"] == "1")].copy()
+        raw["market"] = raw["code"].str.split(".").str[0]
+        raw["plain_code"] = raw["code"].str.split(".").str[-1].str.zfill(6)
+        sh_a = (raw["market"] == "sh") & raw["plain_code"].str.startswith(
+            ("600", "601", "603", "605", "688", "689")
+        )
+        sz_a = (raw["market"] == "sz") & raw["plain_code"].str.startswith(
+            ("000", "001", "002", "003", "300", "301")
+        )
+        raw = raw[sh_a | sz_a].copy()
+        raw["board"] = np.select(
+            [
+                raw["plain_code"].str.startswith(("688", "689")),
+                raw["plain_code"].str.startswith(("300", "301")),
+                raw["market"].eq("sh"),
+            ],
+            ["科创板", "创业板", "沪市主板"],
+            default="深市主板",
+        )
+        # Keep the BaoStock-qualified symbol (for example ``sh.600519``)
+        # out of the public frame before renaming. Otherwise pandas sees both
+        # it and ``plain_code`` as a column named ``code``.
+        result = raw[
+            ["plain_code", "code_name", "market", "board", "ipoDate", "outDate"]
+        ].rename(columns={"plain_code": "code", "code_name": "name"})
+        result["is_st"] = result["name"].str.contains(r"ST|退", case=False, regex=True, na=False)
+        result = result.drop_duplicates("code").sort_values("code").reset_index(drop=True)
+        result.attrs["source"] = "BaoStock 沪深全市场"
+        result.attrs["is_full_market"] = True
+        return result
+    except Exception as exc:
+        result = pd.DataFrame(A_STOCK_LIST_MAIN, columns=["code", "name"])
+        result = result.drop_duplicates(subset="code").reset_index(drop=True)
+        result["code"] = result["code"].astype(str).str.zfill(6)
+        result["market"] = np.where(result["code"].str.startswith("6"), "sh", "sz")
+        result["board"] = "内置样本"
+        result["is_st"] = False
+        result.attrs["source"] = f"内置样本池（全市场源不可用: {exc}）"
+        result.attrs["is_full_market"] = False
+        return result
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_stock_list_extended():
     return get_stock_list()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_value_stock_pool(limit: int = 500) -> pd.DataFrame:
+    """Return a compact, investable research universe for signal screening.
+
+    The primary universe is the latest CSI A500 constituent set (000510).
+    Compared with truncating the market by code, this gives the screener a
+    liquid, industry-representative 500-stock base selected by a published
+    index methodology. If the constituent endpoint is unavailable, the pool
+    falls back to a union of CSI 300 and CSI 500 constituents from BaoStock.
+    """
+    limit = max(1, min(500, int(limit)))
+    primary_error = None
+
+    try:
+        import akshare as ak
+
+        raw = ak.index_stock_cons_csindex(symbol="000510")
+        required = {"成分券代码", "成分券名称"}
+        if raw is None or raw.empty or not required.issubset(raw.columns):
+            raise RuntimeError("中证 A500 成分股接口返回空数据")
+
+        result = raw.rename(columns={"成分券代码": "code", "成分券名称": "name"}).copy()
+        result["code"] = result["code"].astype(str).str.extract(r"(\d{6})", expand=False)
+        result = result.dropna(subset=["code", "name"]).drop_duplicates("code")
+        result["is_st"] = result["name"].str.contains(r"ST|退", case=False, regex=True, na=False)
+        result = result[~result["is_st"]].head(limit).copy()
+        if len(result) < limit:
+            raise RuntimeError(f"中证 A500 有效成分不足 {limit} 只")
+
+        full_market = get_stock_list()
+        metadata_columns = [
+            column for column in ["code", "market", "board", "ipoDate", "outDate"]
+            if column in full_market.columns
+        ]
+        if metadata_columns:
+            result = result.merge(
+                full_market[metadata_columns].drop_duplicates("code"),
+                on="code", how="left",
+            )
+        inferred_market = pd.Series(
+            np.where(result["code"].str.startswith("6"), "sh", "sz"),
+            index=result.index,
+        )
+        if "market" not in result.columns:
+            result["market"] = inferred_market
+        else:
+            result["market"] = result["market"].fillna(inferred_market)
+        inferred_board = pd.Series(
+            np.select(
+                [
+                    result["code"].str.startswith(("688", "689")),
+                    result["code"].str.startswith(("300", "301", "302")),
+                    result["code"].str.startswith("6"),
+                ],
+                ["科创板", "创业板", "沪市主板"],
+                default="深市主板",
+            ),
+            index=result.index,
+        )
+        if "board" not in result.columns:
+            result["board"] = inferred_board
+        else:
+            result["board"] = result["board"].fillna(inferred_board)
+
+        as_of = ""
+        if "日期" in raw.columns:
+            dates = pd.to_datetime(raw["日期"], errors="coerce").dropna()
+            if not dates.empty:
+                as_of = dates.max().strftime("%Y-%m-%d")
+        keep = [
+            column for column in ["code", "name", "market", "board", "ipoDate", "outDate", "is_st"]
+            if column in result.columns
+        ]
+        result = result[keep].reset_index(drop=True)
+        result.attrs["source"] = "中证指数 / 中证 A500（000510）"
+        result.attrs["as_of"] = as_of
+        result.attrs["method"] = "市值代表性·流动性·行业均衡的指数成分池"
+        result.attrs["is_fallback"] = False
+        return result
+    except Exception as exc:
+        primary_error = str(exc)
+
+    try:
+        _ensure_bs_login()
+        frames = []
+        for label, query in [("沪深300", bs.query_hs300_stocks), ("中证500", bs.query_zz500_stocks)]:
+            rs = query()
+            if rs is None or rs.error_code != "0":
+                continue
+            rows = []
+            while rs.next():
+                rows.append(rs.get_row_data())
+            if rows:
+                frame = pd.DataFrame(rows, columns=rs.fields)
+                frame["index_source"] = label
+                frames.append(frame)
+        if not frames:
+            raise RuntimeError("BaoStock 宽基成分股返回空数据")
+
+        raw = pd.concat(frames, ignore_index=True)
+        result = raw.rename(columns={"code_name": "name", "updateDate": "update_date"})
+        result["code"] = result["code"].astype(str).str.split(".").str[-1].str.zfill(6)
+        result = result.drop_duplicates("code").head(limit).copy()
+        result["market"] = np.where(result["code"].str.startswith("6"), "sh", "sz")
+        result["board"] = result["index_source"]
+        result["is_st"] = result["name"].str.contains(r"ST|退", case=False, regex=True, na=False)
+        result = result[~result["is_st"]].reset_index(drop=True)
+        if len(result) < limit:
+            supplement = get_stock_list()
+            supplement = supplement[~supplement["code"].isin(result["code"])].copy()
+            if "is_st" in supplement.columns:
+                supplement = supplement[~supplement["is_st"]]
+            needed = limit - len(result)
+            supplement = supplement.head(needed)
+            result = pd.concat([result, supplement], ignore_index=True, sort=False)
+
+        result = result.head(limit).reset_index(drop=True)
+        as_of = str(raw["update_date"].max()) if "update_date" in raw.columns else ""
+        result.attrs["source"] = "BaoStock 沪深300 + 中证500 备用池"
+        result.attrs["as_of"] = as_of
+        result.attrs["method"] = "宽基指数成分优先的 500 只备用池"
+        result.attrs["is_fallback"] = True
+        result.attrs["primary_error"] = primary_error
+        return result
+    except Exception as fallback_exc:
+        result = get_stock_list().copy()
+        if "is_st" in result.columns:
+            result = result[~result["is_st"]]
+        result = result.head(limit).reset_index(drop=True)
+        result.attrs["source"] = f"全市场顺序备用池（{fallback_exc}）"
+        result.attrs["as_of"] = ""
+        result.attrs["method"] = "数据源异常时的临时降级"
+        result.attrs["is_fallback"] = True
+        result.attrs["primary_error"] = primary_error
+        return result
 
 
 # ═══════════════════════════════════════════════════════════
@@ -488,43 +699,92 @@ def get_test_data(days=500, volatility=0.02, start_price=100.0, code="TEST", see
     return df
 
 
+def _efinance_secid(code: str) -> str:
+    """Convert an A-share/ETF code to Eastmoney's market-qualified secid."""
+    value = str(code).strip()
+    if "." in value:
+        return value
+    value = value.zfill(6)
+    market = "1" if value.startswith(("5", "6")) else "0"
+    return f"{market}.{value}"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_daily_data_efinance(code, start_date, end_date, adjust="qfq"):
-    """Fetch and normalize a daily OHLCV history through efinance.
+    """Fetch efinance-compatible daily history without the blocking ID lookup.
 
-    efinance returns Chinese column names; this adapter converts them to the
-    same schema used by the rest of the application.
+    ``efinance`` ultimately reads Eastmoney's ``push2his`` K-line endpoint. Its
+    symbol-discovery request can block indefinitely on some macOS/network
+    combinations even though the K-line endpoint is healthy.  This adapter
+    builds the deterministic market-qualified id locally and calls the same
+    upstream contract with an explicit timeout. If that upstream is blocked,
+    the adapter transparently uses the existing Tencent real-market route and
+    labels it as an efinance compatibility path. No synthetic prices are ever
+    returned and the exact route is recorded in ``DataFrame.attrs``.
     """
-    try:
-        import efinance as ef
-    except ImportError as exc:
-        raise RuntimeError("未安装 efinance，请先执行 pip install efinance") from exc
-
     fqt = {"": 0, "qfq": 1, "hfq": 2}.get(adjust, 1)
-    raw = ef.stock.get_quote_history(
-        str(code),
-        beg=pd.Timestamp(start_date).strftime("%Y%m%d"),
-        end=pd.Timestamp(end_date).strftime("%Y%m%d"),
-        klt=101,
-        fqt=fqt,
-        suppress_error=True,
-    )
-    if raw is None or len(raw) == 0:
-        return pd.DataFrame()
-    rename = {
-        "日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
-        "最低": "low", "成交量": "volume", "成交额": "amount",
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "beg": pd.Timestamp(start_date).strftime("%Y%m%d"),
+        "end": pd.Timestamp(end_date).strftime("%Y%m%d"),
+        "rtntype": "6",
+        "secid": _efinance_secid(code),
+        "klt": "101",
+        "fqt": str(fqt),
     }
-    result = raw.rename(columns=rename)
-    required = ["date", "open", "close", "high", "low", "volume"]
-    if any(column not in result.columns for column in required):
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urllib.parse.urlencode(params, safe=",")
+    upstream_error = None
+    try:
+        completed = subprocess.run(
+            [
+                "curl", "-k", "-fsSL", "--connect-timeout", "5", "--max-time", "12", url,
+            ],
+            check=True, capture_output=True, timeout=15,
+        )
+        payload = json.loads(completed.stdout)
+    except Exception as exc:
+        upstream_error = str(exc)
+        fallback = _fetch_tencent_kline(code, start_date, end_date, adjust)
+        if fallback is not None and not fallback.empty:
+            fallback.attrs["provider"] = "efinance 兼容链路 / 腾讯证券"
+            fallback.attrs["upstream"] = "web.ifzq.gtimg.cn"
+            fallback.attrs["efinance_error"] = upstream_error
+            fallback.attrs["synthetic"] = False
+            return fallback
+        raise RuntimeError(f"efinance/东方财富行情请求失败，腾讯兼容链路也不可用: {exc}") from exc
+
+    node = payload.get("data") or {}
+    rows = node.get("klines") or []
+    if not rows:
+        fallback = _fetch_tencent_kline(code, start_date, end_date, adjust)
+        if fallback is not None and not fallback.empty:
+            fallback.attrs["provider"] = "efinance 兼容链路 / 腾讯证券"
+            fallback.attrs["upstream"] = "web.ifzq.gtimg.cn"
+            fallback.attrs["efinance_error"] = "东方财富返回空行情"
+            fallback.attrs["synthetic"] = False
+            return fallback
         return pd.DataFrame()
-    keep = required + (["amount"] if "amount" in result.columns else [])
-    result = result[keep].copy()
+
+    columns = [
+        "date", "open", "close", "high", "low", "volume", "amount",
+        "amplitude", "change_pct", "change", "turnover_rate",
+    ]
+    records = [row.split(",")[:len(columns)] for row in rows]
+    result = pd.DataFrame(records, columns=columns)
     result["date"] = pd.to_datetime(result["date"], errors="coerce")
-    for column in ["open", "close", "high", "low", "volume", "amount"]:
-        if column in result.columns:
-            result[column] = pd.to_numeric(result[column], errors="coerce")
-    return result.dropna(subset=["date", "open", "close", "high", "low"]).sort_values("date").reset_index(drop=True)
+    for column in columns[1:]:
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    result = (
+        result.dropna(subset=["date", "open", "close", "high", "low"])
+        .drop_duplicates("date")
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+    result.attrs["provider"] = "efinance / 东方财富直连"
+    result.attrs["upstream"] = "push2his.eastmoney.com"
+    result.attrs["synthetic"] = False
+    return result
 
 
 # ═══════════════════════════════════════════════════════════

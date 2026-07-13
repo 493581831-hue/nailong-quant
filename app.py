@@ -18,7 +18,9 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from quant_a.data_fetcher import get_stock_list, get_daily_data, get_batch_data, get_index_data
+from quant_a.data_fetcher import (
+    get_stock_list, get_value_stock_pool, get_daily_data, get_batch_data, get_index_data,
+)
 from quant_a.strategies import STRATEGY_REGISTRY, MovingAverageCross
 from quant_a.backtest import BacktestEngine, run_portfolio_backtest
 from quant_a.analysis import calc_performance, calc_drawdown_series, monthly_returns
@@ -32,6 +34,12 @@ from quant_a.data_fetcher import get_daily_data_efinance
 from quant_a.research_workspace import ResearchWorkspace
 from quant_a.cta import NailongCTA, run_cta_backtest
 from quant_a.alpha2_single import discover_single_asset_alphas, backtest_single_asset_alpha
+from quant_a.alpha2_multi import (
+    ASSET_UNIVERSE,
+    MultiAssetParams,
+    fetch_asset_pool,
+    run_multi_asset_alpha2,
+)
 
 
 def asset_data_uri(relative_path: str) -> str:
@@ -44,6 +52,9 @@ def asset_data_uri(relative_path: str) -> str:
 
 NAILONG_IMAGE_URI = asset_data_uri("assets/nailong.png")
 PROFILE_IMAGE_URI = asset_data_uri("assets/profile.png")
+FLAGSHIP_NAILONG_URI = asset_data_uri("assets/generated_nailong/hero-flagship.png")
+QUANT_SQUAD_URI = asset_data_uri("assets/generated_nailong/quant-squad.png")
+ALPHA_ORB_NAILONG_URI = asset_data_uri("assets/generated_nailong/alpha-orb.png")
 NAILONG_STICKERS = {
     "backtest": asset_data_uri("assets/stickers_hd/backtest.png"),
     "portfolio": asset_data_uri("assets/stickers_hd/portfolio.png"),
@@ -53,6 +64,7 @@ NAILONG_STICKERS = {
     "guide": asset_data_uri("assets/stickers_hd/guide.png"),
     "about": asset_data_uri("assets/stickers_hd/about.png"),
     "cta": asset_data_uri("assets/stickers_hd/cta.png"),
+    "data": asset_data_uri("assets/stickers_hd/guide.png"),
 }
 
 # === 页面配置 ===
@@ -2459,11 +2471,15 @@ def ui_hero():
           <p class="ib-hero-subtitle">奶龙和你一起扫描市场、验证策略、拆解组合，把复杂的量化研究变成清楚、可靠、可以持续复盘的投资纪律。</p>
           <div class="ib-hero-pills"><span>奶龙找信号</span><span>奶龙看风险</span><span>奶龙做复盘</span></div>
         </div>
-        <div class="ib-signal-stage" aria-hidden="true">
+        <div class="ib-signal-stage">
           <div class="ib-signal-halo halo-one"></div>
           <div class="ib-signal-halo halo-two"></div>
           <div class="ib-signal-halo halo-three"></div>
-          <div class="nl-home-mascot">{nailong_mascot_svg("home")}</div>
+          <div class="nl-home-flagship">
+            <span class="nl-flagship-aura"></span>
+            <img src="{FLAGSHIP_NAILONG_URI}" alt="奶龙量化信号队长" />
+            <span class="nl-flagship-badge"><b>NL-01</b> SIGNAL CAPTAIN</span>
+          </div>
           <div class="ib-orbit-dot dot-one"></div>
           <div class="ib-orbit-dot dot-two"></div>
           <div class="ib-signal-tag tag-one"><b>01</b> Discover</div>
@@ -2475,7 +2491,35 @@ def ui_hero():
         <div class="ib-hero-stat"><b>{len(STRATEGY_REGISTRY)}</b><span>Strategy frameworks</span></div>
         <div class="ib-hero-stat"><b>{len(SCREENER_STRATEGIES)}</b><span>Screening signals</span></div>
         <div class="ib-hero-stat"><b>A-Share</b><span>Primary universe</span></div>
-        <div class="ib-hero-stat"><b>Dual Source</b><span>Real market data</span></div>
+        <div class="ib-hero-stat"><b>Tri Source</b><span>Tencent · AKShare · efinance</span></div>
+      </div>
+    </section>
+    <section class="nl-home-crew-deck" aria-label="奶龙量化研究小队">
+      <div class="nl-crew-copy">
+        <span>Nailong Quant Crew / Model 02</span>
+        <h3>不是一只奶龙，是一整支投研小队。</h3>
+        <p>行情、风控、选股、组合与信号五个角色持续协作，让每项研究都有对应的奶龙守位。</p>
+      </div>
+      <div class="nl-crew-rail">
+        <span class="nl-crew-orbit orbit-a"></span><span class="nl-crew-orbit orbit-b"></span>
+        <img src="{QUANT_SQUAD_URI}" alt="五只奶龙量化研究小队" />
+      </div>
+    </section>
+    """)
+
+
+def ui_nailong_model_stage():
+    render_html(f"""
+    <section class="nl-model-stage">
+      <div class="nl-model-copy">
+        <span class="nl-model-kicker">Nailong Alpha Core / Model 03</span>
+        <h2>把多资产模型，交给会看风险的奶龙。</h2>
+        <p>围绕动量、趋势、波动率与现金缓冲构建动态模型球；动画只承担叙事，所有投资结论仍来自真实数据与可复现回测。</p>
+        <div class="nl-model-tags"><span>Momentum</span><span>Trend</span><span>Volatility</span><span>Cash</span></div>
+      </div>
+      <div class="nl-orb-character">
+        <span class="nl-orb-ring ring-one"></span><span class="nl-orb-ring ring-two"></span>
+        <img src="{ALPHA_ORB_NAILONG_URI}" alt="构建多资产 Alpha 模型球的奶龙" />
       </div>
     </section>
     """)
@@ -2620,6 +2664,14 @@ def ui_module_header(index: str, title: str, subtitle: str, objective: str, proc
       <div class="nl-page-mascot">{nailong_mascot_svg(variant)}</div>
       <div class="ib-process">{process_html}</div>
     </section>
+    <section class="nl-page-crewline theme-{escape(variant)}" aria-label="本页奶龙研究小队">
+      <div class="nl-page-crewcopy">
+        <span>PAGE CREW / {escape(index)}</span>
+        <b>五只奶龙共同值守本页</b>
+        <small>行情 · 风控 · 研究 · 组合 · 信号</small>
+      </div>
+      <div class="nl-page-squad"><img src="{QUANT_SQUAD_URI}" alt="奶龙页面研究小队" /></div>
+    </section>
     """)
 
 
@@ -2671,7 +2723,7 @@ def plot_signal_distribution(signal_counts):
         )
         fig.update_traces(marker_color="#163A5A", textfont_color="#172839")
         fig.update_traces(textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     except Exception:
         pass
 
@@ -2687,6 +2739,7 @@ defaults = {
     "last_backtest_summary": None,
     "research_workspace": None,
     "alpha2_run": None,
+    "alpha2_multi_run": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -2720,7 +2773,7 @@ if not _net_ok:
 
 def load_stock_list():
     """加载股票列表(带缓存, 失败后返回空DataFrame)"""
-    if st.session_state.stock_list is None:
+    if st.session_state.stock_list is None or len(st.session_state.stock_list) < 1000:
         with st.spinner("加载A股列表..."):
             try:
                 st.session_state.stock_list = get_stock_list()
@@ -2730,6 +2783,56 @@ def load_stock_list():
     if st.session_state.stock_list is None:
         st.session_state.stock_list = pd.DataFrame(columns=["code", "name"])
     return st.session_state.stock_list
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_alpha2_multi_pool(start_date, end_date, source):
+    """Cache the fixed ETF universe while preserving per-asset provenance."""
+    return fetch_asset_pool(start_date, end_date, source)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def probe_market_sources():
+    """Live-check the two deterministic history routes and cross-validate prices."""
+    end = pd.Timestamp.today().normalize()
+    start = end - pd.Timedelta(days=365)
+    report = {}
+    frames = {}
+    checks = {
+        "efinance": lambda: get_daily_data_efinance("600309", start, end, "qfq"),
+        "腾讯证券": lambda: get_daily_data("600309", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"), "qfq"),
+    }
+    for name, loader in checks.items():
+        started = time.perf_counter()
+        try:
+            frame = loader()
+            if frame is None or frame.empty:
+                raise RuntimeError("返回空行情")
+            frames[name] = frame
+            report[name] = {
+                "ok": True,
+                "rows": len(frame),
+                "latest": pd.Timestamp(frame["date"].iloc[-1]).strftime("%Y-%m-%d"),
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "route": frame.attrs.get("provider", name),
+            }
+        except Exception as exc:
+            report[name] = {
+                "ok": False, "rows": 0, "latest": "—",
+                "latency_ms": int((time.perf_counter() - started) * 1000),
+                "route": str(exc),
+            }
+
+    report["cross_check_bps"] = None
+    if len(frames) == 2:
+        left = frames["efinance"][["date", "close"]].rename(columns={"close": "ef_close"})
+        right = frames["腾讯证券"][["date", "close"]].rename(columns={"close": "tx_close"})
+        paired = left.merge(right, on="date").dropna()
+        if not paired.empty and paired["tx_close"].iloc[-1] != 0:
+            report["cross_check_bps"] = abs(
+                paired["ef_close"].iloc[-1] / paired["tx_close"].iloc[-1] - 1
+            ) * 10_000
+    return report
 
 
 def get_stock_name(code):
@@ -2774,16 +2877,24 @@ nav_defs = [
     ("00  投研总览", "🏠 首页总览"),
     ("01  策略验证", "📊 策略回测"),
     ("02  Alpha² 单资产", "🧠 Alpha²单资产"),
-    ("03  组合归因", "📑 组合回测"),
-    ("04  信号筛选", "🎯 自动选股"),
-    ("05  模拟执行", "💰 模拟盘交易"),
-    ("06  自动交易", "🤖 自动交易"),
-    ("07  操作手册", "📋 使用说明"),
-    ("08  平台信息", "ℹ️ 关于"),
+    ("03  Alpha2 多资产", "🛡️ Alpha2多资产"),
+    ("04  组合归因", "📑 组合回测"),
+    ("05  信号筛选", "🎯 自动选股"),
+    ("06  模拟执行", "💰 模拟盘交易"),
+    ("07  自动交易", "🤖 自动交易"),
+    ("08  操作手册", "📋 使用说明"),
+    ("09  数据源中心", "🧭 数据源中心"),
+    ("10  平台信息", "ℹ️ 关于"),
 ]
 
 if "nav_tab" not in st.session_state:
     st.session_state.nav_tab = "🏠 首页总览"
+
+
+def _select_navigation(target):
+    """Use a callback so sidebar navigation changes atomically on rerun."""
+    st.session_state.nav_tab = target
+
 
 for display_name, state_val in nav_defs:
     is_active = st.session_state.nav_tab == state_val
@@ -2792,11 +2903,9 @@ for display_name, state_val in nav_defs:
         display_name,
         key=f"nav_{state_val}",
         type=btn_type,
+        on_click=_select_navigation,
+        args=(state_val,),
     )
-    if st.session_state.get(f"nav_{state_val}"):
-        if st.session_state.nav_tab != state_val:
-            st.session_state.nav_tab = state_val
-            st.rerun()
 
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 st.sidebar.markdown('<div class="sidebar-footer">Research · Risk · Execution</div>', unsafe_allow_html=True)
@@ -2813,6 +2922,7 @@ tab = st.session_state.nav_tab
 # =============================================================
 if tab == "🏠 首页总览":
     ui_hero()
+    ui_nailong_model_stage()
 
     ui_section_title('Research flow', '不是功能菜单，而是一条从机会发现到资本执行的完整研究路径。')
     ui_flow_journey([
@@ -2822,14 +2932,15 @@ if tab == "🏠 首页总览":
         ("EXECUTE", "纪律执行", "用模拟账户复核仓位、订单与执行路径。"),
     ])
 
-    ui_section_title('Core intelligence', '六项能力沿研究流程自然展开，保持连续、轻盈、可操作。')
+    ui_section_title('Core intelligence', '七项能力沿研究流程自然展开，保持连续、轻盈、可操作。')
     ui_capability_stream([
         ("BT / 01", "单标的回测", "检验策略在指定标的、区间、复权与交易成本下的表现。"),
-        ("PF / 02", "组合层验证", "对多标的等权组合进行权益、回撤、月度收益与贡献度分析。"),
-        ("SC / 03", "全市场筛选", "并行扫描股票池，以综合评分或信号强度建立研究优先级。"),
-        ("PE / 04", "模拟盘执行", "持久化账户、仓位、订单与交易日志，验证执行闭环。"),
-        ("AE / 05", "自动化引擎", "轮询策略信号并执行风控约束，连接模拟盘与实盘适配层。"),
-        ("GC / 06", "治理与边界", "明确数据口径、策略假设与风险提示，避免把回测结果误当成确定性。"),
+        ("A2 / 02", "Alpha2 多资产", "用双动量、长期趋势与波动率预算在八类 ETF 间建立防守型配置。"),
+        ("PF / 03", "组合层验证", "对多标的等权组合进行权益、回撤、月度收益与贡献度分析。"),
+        ("SC / 04", "全市场筛选", "并行扫描股票池，以综合评分或信号强度建立研究优先级。"),
+        ("PE / 05", "模拟盘执行", "持久化账户、仓位、订单与交易日志，验证执行闭环。"),
+        ("AE / 06", "自动化引擎", "轮询策略信号并执行风控约束，连接模拟盘与实盘适配层。"),
+        ("GC / 07", "治理与边界", "明确数据口径、策略假设与风险提示，避免把回测结果误当成确定性。"),
     ])
 
     ui_feature_strip([("Evidence first", "先定义数据、区间与成本口径，再评价策略结果。"), ("Risk before return", "优先审阅回撤、稳定性与归因，再讨论收益。"), ("Simulation before capital", "所有执行流程先通过模拟账户验证，再考虑实盘适配。")])
@@ -2942,13 +3053,13 @@ elif tab == "📊 策略回测":
         perf_df = pd.DataFrame(list(perf.items()), columns=["指标", "值"])
         col_tb, col_btn = st.columns([4, 1])
         with col_tb:
-            st.dataframe(perf_df, use_container_width=True, hide_index=True)
+            st.dataframe(perf_df, width="stretch", hide_index=True)
         with col_btn:
             csv_download_link(perf_df, f"perf_{code_input}.csv", "导出 CSV")
 
         # K线图
         fig_k = plot_kline_with_signals(df_sig, strategy_name=f"{code_input} {get_stock_name(code_input)}")
-        st.plotly_chart(fig_k, use_container_width=True)
+        st.plotly_chart(fig_k, width="stretch")
 
         # 资金曲线 + 回撤
         col_l, col_r = st.columns([3, 2])
@@ -2956,16 +3067,16 @@ elif tab == "📊 策略回测":
             st.plotly_chart(
                 plot_equity_curve(equity_df, benchmark_df, initial_cash,
                                   title=f"{code_input} {get_stock_name(code_input)}"),
-                use_container_width=True,
+                width="stretch",
             )
         with col_r:
             dd_df = calc_drawdown_series(equity_df)
-            st.plotly_chart(plot_drawdown(dd_df), use_container_width=True)
+            st.plotly_chart(plot_drawdown(dd_df), width="stretch")
 
         # 盈亏图
         fig_pnl = plot_trade_pnl(trades_df)
         if fig_pnl:
-            st.plotly_chart(fig_pnl, use_container_width=True)
+            st.plotly_chart(fig_pnl, width="stretch")
 
         # 月度热力图
         if len(equity_df) > 60:
@@ -2973,7 +3084,7 @@ elif tab == "📊 策略回测":
                 hm = monthly_returns(equity_df)
                 fig_hm = plot_monthly_heatmap(hm)
                 if fig_hm:
-                    st.plotly_chart(fig_hm, use_container_width=True)
+                    st.plotly_chart(fig_hm, width="stretch")
             except Exception:
                 pass
 
@@ -2982,7 +3093,7 @@ elif tab == "📊 策略回测":
             st.markdown("### 交易明细")
             col_tb, col_btn = st.columns([4, 1])
             with col_tb:
-                st.dataframe(trades_df, use_container_width=True, hide_index=True)
+                st.dataframe(trades_df, width="stretch", hide_index=True)
             with col_btn:
                 csv_download_link(trades_df, f"trades_{code_input}.csv", "导出 CSV")
         else:
@@ -3084,7 +3195,7 @@ elif tab == "🧠 Alpha²单资产":
                 "max_selected_corr": "最大相关", "selection_score": "选择得分",
             })
             visible_columns = ["公式", "因子族", "量纲", "训练IC", "验证IC", "测试IC", "验证RankIC", "测试RankIC", "最大相关", "选择得分"]
-            st.dataframe(selected_view[[column for column in visible_columns if column in selected_view.columns]], use_container_width=True, hide_index=True)
+            st.dataframe(selected_view[[column for column in visible_columns if column in selected_view.columns]], width="stretch", hide_index=True)
 
         try:
             import plotly.graph_objects as go
@@ -3096,7 +3207,7 @@ elif tab == "🧠 Alpha²单资产":
             if pd.notna(test_start):
                 fig.add_vline(x=test_start, line_dash="dot", line_color="#bc6b4b", annotation_text="测试集开始")
             fig.update_layout(template="plotly_white", height=440, margin=dict(l=20, r=20, t=50, b=30), title=f"{alpha_run['code']} / 权益曲线")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             signal_fig = go.Figure()
             signal_fig.add_trace(go.Scatter(x=bt["date"], y=bt["signal_strength"], name="组合 Alpha", line=dict(color="#7b5d43", width=2)))
@@ -3104,21 +3215,121 @@ elif tab == "🧠 Alpha²单资产":
             if alpha_long_short:
                 signal_fig.add_hline(y=-alpha_threshold, line_dash="dash", line_color="#d56d55")
             signal_fig.update_layout(template="plotly_white", height=300, margin=dict(l=20, r=20, t=45, b=25), title="组合信号与交易阈值")
-            st.plotly_chart(signal_fig, use_container_width=True)
+            st.plotly_chart(signal_fig, width="stretch")
         except Exception:
             pass
 
         with st.expander("查看全部合法公式与 IC 诊断"):
-            st.dataframe(alpha_run["all"], use_container_width=True, hide_index=True)
+            st.dataframe(alpha_run["all"], width="stretch", hide_index=True)
 
         st.caption(f"数据源 / {alpha_run['source']} · 样本量 / {len(alpha_run['market'])} · 执行规则 / 当日生成信号、下一交易日持仓 · 所有收益均扣除设定换手成本")
 
 
 # =============================================================
-# TAB 3: 组合回测 (NEW)
+# TAB 3: Alpha2 多资产防守型动量
+# =============================================================
+elif tab == "🛡️ Alpha2多资产":
+    ui_module_header(
+        "03", "Alpha2 多资产防守引擎",
+        "在中国核心、成长、红利、港股、纳指、黄金与国债 ETF 之间进行月频轮动；只有正动量且站上长期趋势的资产才能入选，再用波动率预算自动保留现金。",
+        "争取更高风险调整后收益，同时把未来函数、过度换手和无约束回撤挡在模型之外。",
+        ["同步八类真实行情", "双动量与趋势过滤", "风险预算分配", "样本外回测审计"],
+        variant="portfolio",
+    )
+
+    ui_note_banner(
+        "研究边界：固定资产池并不消除选择偏差；回测按月形成信号、下一交易日执行，并扣除换手成本。"
+        "默认参数来自稳健性筛选而非追逐最高样本内收益，2021年之后始终单独展示。"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        multi_source = st.selectbox("首选数据源", ["腾讯证券", "AKShare", "efinance"], key="alpha2m_source")
+        multi_start = st.date_input("样本开始", value=pd.Timestamp("2015-01-01"), key="alpha2m_start")
+    with c2:
+        multi_momentum = st.select_slider("动量观察窗", options=[63, 126, 189, 252], value=252, key="alpha2m_mom")
+        multi_end = st.date_input("样本结束", value=pd.Timestamp("today"), key="alpha2m_end")
+    with c3:
+        multi_trend = st.select_slider("趋势均线", options=[80, 120, 160, 200, 240], value=120, key="alpha2m_trend")
+        multi_holdings = st.slider("最大持仓数", 1, 3, 1, key="alpha2m_holdings")
+    with c4:
+        multi_vol_pct = st.slider("目标年化波动(%)", 8, 20, 12, 1, key="alpha2m_vol")
+        multi_cost = st.number_input("单边换手成本(bp)", 0.0, 50.0, 10.0, 1.0, key="alpha2m_cost")
+
+    if st.button("运行 Alpha2 多资产回测", type="primary", key="alpha2m_run_button"):
+        try:
+            with st.spinner("同步真实 ETF 行情、计算月频信号与样本外表现..."):
+                multi_data, provenance = load_alpha2_multi_pool(multi_start, multi_end, multi_source)
+                params = MultiAssetParams(
+                    momentum_days=multi_momentum,
+                    trend_days=multi_trend,
+                    volatility_target=multi_vol_pct / 100,
+                    holdings=multi_holdings,
+                    cost_bps=multi_cost,
+                )
+                output = run_multi_asset_alpha2(multi_data, params)
+                output["provenance"] = provenance
+                st.session_state.alpha2_multi_run = output
+                workspace.audit(
+                    "ALPHA2_MULTI_ASSET",
+                    "Completed defensive multi-asset momentum backtest",
+                    {"source": multi_source, "assets": len(multi_data), "observations": output["observations"]},
+                )
+        except Exception as exc:
+            st.error(f"Alpha2 多资产回测失败：{exc}")
+
+    multi_run = st.session_state.alpha2_multi_run
+    if multi_run:
+        strategy = multi_run["strategy"]
+        benchmark = multi_run["benchmark"]
+        metric_cols = st.columns(5)
+        metric_cols[0].metric("年化收益", f"{strategy['annual_return']:.1%}", f"沪深300 {benchmark['annual_return']:.1%}")
+        metric_cols[1].metric("最大回撤", f"{strategy['max_drawdown']:.1%}", f"沪深300 {benchmark['max_drawdown']:.1%}", delta_color="inverse")
+        metric_cols[2].metric("夏普比率", f"{strategy['sharpe']:.2f}", f"沪深300 {benchmark['sharpe']:.2f}")
+        metric_cols[3].metric("累计收益", f"{strategy['total_return']:.0%}", f"{multi_run['observations']:,} 交易日")
+        metric_cols[4].metric("现金缓冲", f"{multi_run['cash_weight']:.0%}", f"换仓 {multi_run['trade_count']} 次")
+
+        try:
+            import plotly.graph_objects as go
+            curve = multi_run["equity"]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=curve["date"], y=curve["Alpha2"], name="Alpha2", line=dict(color="#0b6b52", width=3)))
+            fig.add_trace(go.Scatter(x=curve["date"], y=curve["沪深300"], name="沪深300", line=dict(color="#9aa39e", width=2)))
+            fig.add_vrect(x0="2015-01-01", x1="2020-12-31", fillcolor="#c9f55b", opacity=.06, line_width=0, annotation_text="训练区间")
+            fig.add_vline(x=pd.Timestamp("2021-01-01"), line_dash="dot", line_color="#d18455", annotation_text="样本外开始")
+            fig.update_layout(template="plotly_white", height=470, margin=dict(l=20, r=20, t=55, b=30), title="累计净值 / Alpha2 vs 沪深300", hovermode="x unified")
+            st.plotly_chart(fig, width="stretch")
+        except Exception:
+            pass
+
+        train, test = multi_run["train"], multi_run["test"]
+        ui_micro_head("时间隔离验证", "参数形成期与2021年后的留出样本分别报告，不用测试集反向挑选参数。")
+        v1, v2, v3 = st.columns(3)
+        v1.metric("训练期年化 / 回撤", f"{train['annual_return']:.1%} / {train['max_drawdown']:.1%}")
+        v2.metric("样本外年化 / 回撤", f"{test['annual_return']:.1%} / {test['max_drawdown']:.1%}")
+        v3.metric("样本外夏普", f"{test['sharpe']:.2f}")
+
+        ui_micro_head("当前模型持仓", "权重小于100%的部分自动保留为现金，不通过杠杆追逐收益。")
+        holdings = multi_run["holdings"].copy()
+        if holdings.empty:
+            st.info("当前没有资产同时通过正动量与趋势过滤，模型保持现金。")
+        else:
+            holdings["模型权重"] = holdings["模型权重"].map(lambda value: f"{value:.1%}")
+            holdings["动量"] = holdings["动量"].map(lambda value: f"{value:.1%}")
+            holdings["风险调整得分"] = holdings["风险调整得分"].map(lambda value: f"{value:.2f}")
+            st.dataframe(holdings, width="stretch", hide_index=True)
+
+        with st.expander("数据来源、资产池与审计说明"):
+            source_rows = [{"代码": code, "资产": ASSET_UNIVERSE[code]["name"], "类型": ASSET_UNIVERSE[code]["kind"], "实际来源": source} for code, source in multi_run["provenance"].items()]
+            st.dataframe(pd.DataFrame(source_rows), width="stretch", hide_index=True)
+            st.caption(f"数据截至 {multi_run['last_date']:%Y-%m-%d} · 前复权日线 · 月频信号 · 下一交易日执行 · 成本 {multi_run['params'].cost_bps:.0f}bp · 仅用于研究，不构成投资建议")
+
+
+# =============================================================
+# TAB 4: 组合回测 (NEW)
 # =============================================================
 elif tab == "📑 组合回测":
-    ui_module_header("03", "组合归因", "把多个候选标的置于统一策略和资本约束下，比较组合权益、个股贡献、回撤结构与分散化效果。", "识别收益究竟来自组合构建，还是被少数标的和单一行情阶段所主导。", ["构建候选组合", "统一策略与成本", "对比组合与基准", "拆解个股贡献"], variant="portfolio")
+    ui_module_header("04", "组合归因", "把多个候选标的置于统一策略和资本约束下，比较组合权益、个股贡献、回撤结构与分散化效果。", "识别收益究竟来自组合构建，还是被少数标的和单一行情阶段所主导。", ["构建候选组合", "统一策略与成本", "对比组合与基准", "拆解个股贡献"], variant="portfolio")
 
     ui_note_banner("建议将组合回测用于候选池的二次验证：先做自动选股，再将结果导入组合层面对比收益、回撤和分散化效果。")
 
@@ -3237,21 +3448,21 @@ elif tab == "📑 组合回测":
                 "胜率": p.get("胜率", "-"),
                 "交易次数": p.get("交易次数", "-"),
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
         # 组合对比图
         fig_comp = plot_portfolio_comparison(individual_results, combined_equity, initial_cash)
-        st.plotly_chart(fig_comp, use_container_width=True)
+        st.plotly_chart(fig_comp, width="stretch")
 
         # 资金曲线 + 基准
         st.plotly_chart(
             plot_equity_curve(combined_equity, benchmark_df, initial_cash, title="组合收益 vs 沪深300"),
-            use_container_width=True,
+            width="stretch",
         )
 
         # 回撤
         dd_df = calc_drawdown_series(combined_equity)
-        st.plotly_chart(plot_drawdown(dd_df), use_container_width=True)
+        st.plotly_chart(plot_drawdown(dd_df), width="stretch")
 
         # 月度收益热力图 (组合)
         if len(combined_equity) > 60:
@@ -3260,7 +3471,7 @@ elif tab == "📑 组合回测":
                 fig_hm = plot_monthly_heatmap(hm)
                 if fig_hm:
                     ui_micro_head("月度收益热力图", "用更直观的方式观察组合在不同月份的表现。")
-                    st.plotly_chart(fig_hm, use_container_width=True)
+                    st.plotly_chart(fig_hm, width="stretch")
             except Exception:
                 pass
 
@@ -3289,21 +3500,21 @@ elif tab == "📑 组合回测":
             )
             style_figure(fig_compare, title="各股票收益曲线对比（归一化）", height=450, x_title="日期", y_title="累计收益率 (%)")
             ui_micro_head("个股收益曲线对比", "查看各标的与组合的归一化收益走势。")
-            st.plotly_chart(fig_compare, use_container_width=True)
+            st.plotly_chart(fig_compare, width="stretch")
         except Exception:
             pass
 
         # 盈亏图
         fig_pnl = plot_trade_pnl(all_trades)
         if fig_pnl:
-            st.plotly_chart(fig_pnl, use_container_width=True)
+            st.plotly_chart(fig_pnl, width="stretch")
 
         # 交易明细
         if all_trades is not None and len(all_trades) > 0:
             st.markdown("### 交易明细")
             col_tb, col_btn = st.columns([4, 1])
             with col_tb:
-                st.dataframe(all_trades, use_container_width=True, hide_index=True)
+                st.dataframe(all_trades, width="stretch", hide_index=True)
             with col_btn:
                 csv_download_link(all_trades, "portfolio_trades.csv", "导出 CSV")
 
@@ -3312,7 +3523,7 @@ elif tab == "📑 组合回测":
         st.markdown("### 全部绩效指标")
         col_tb, col_btn = st.columns([4, 1])
         with col_tb:
-            st.dataframe(perf_df, use_container_width=True, hide_index=True)
+            st.dataframe(perf_df, width="stretch", hide_index=True)
         with col_btn:
             csv_download_link(perf_df, "portfolio_perf.csv", "导出 CSV")
 
@@ -3321,9 +3532,27 @@ elif tab == "📑 组合回测":
 # TAB 3: 自动选股 (NEW)
 # =============================================================
 elif tab == "🎯 自动选股":
-    ui_module_header("04", "信号筛选", "在可投资股票池中叠加技术条件、价格边界与回看区间，用统一评分建立候选标的的研究优先级。", "把庞大股票池压缩成一份可解释、可排序、可继续验证的工作清单。", ["定义筛选条件", "设定样本边界", "并行扫描排序", "流转候选名单"], variant="screener")
+    ui_module_header("04", "信号筛选", "在精选 500 只可投资股票中叠加技术条件、价格边界与回看区间，用统一评分建立候选标的的研究优先级。", "先用市值代表性、流动性与行业覆盖缩小基础池，再用技术信号生成可继续验证的工作清单。", ["载入精选500池", "定义筛选条件", "并行扫描排序", "流转候选名单"], variant="screener")
 
-    ui_note_banner("选股结果支持与模拟盘、自动交易模块联动，适合盘前筛查、盘中跟踪和演示展示。")
+    ui_note_banner("基础池默认使用最新中证 A500 成分股；选股结果可与模拟盘、自动交易模块联动。")
+
+    with st.spinner("正在载入精选 500 股票池..."):
+        value_pool = get_value_stock_pool(limit=500)
+    pool_source = value_pool.attrs.get("source", "精选股票池")
+    pool_as_of = value_pool.attrs.get("as_of", "")
+    pool_method = value_pool.attrs.get("method", "")
+    pool_fallback = value_pool.attrs.get("is_fallback", False)
+    if len(value_pool) == 500 and not pool_fallback:
+        st.success(f"精选股票池已就绪 / 500 只 / {pool_source}")
+    else:
+        st.warning(f"当前载入 {len(value_pool)} 只备用精选标的 / {pool_source}")
+    meta_parts = [part for part in [f"成分日期 {pool_as_of}" if pool_as_of else "", pool_method] if part]
+    if meta_parts:
+        st.caption(" · ".join(meta_parts))
+    with st.expander("查看精选 500 股票池"):
+        pool_columns = [column for column in ["code", "name", "board"] if column in value_pool.columns]
+        st.dataframe(value_pool[pool_columns], width="stretch", hide_index=True)
+        st.caption("该池是信号研究的基础样本，不代表个股买入建议。")
 
     col1, col2 = st.columns([1, 1])
 
@@ -3365,14 +3594,14 @@ elif tab == "🎯 自动选股":
         if current % 50 == 0 or current == total:
             status_text.text(f"扫描进度: {current}/{total} ({pct*100:.0f}%)")
 
-    if st.button("开始全市场选股", type="primary"):
+    if st.button("开始精选 500 选股", type="primary"):
         if not selected_conds:
             st.warning("请至少选择一个筛选条件")
             st.stop()
         st.session_state.screener_running = True
 
         try:
-            with st.spinner("正在全市场扫描, 请稍候..."):
+            with st.spinner("正在扫描精选 500 股票池，请稍候..."):
                 result_df = run_screener(
                     conditions=selected_conds,
                     price_min=price_min,
@@ -3388,7 +3617,11 @@ elif tab == "🎯 自动选股":
                 workspace.audit(
                     "MARKET_SCREEN",
                     f"Screened universe and returned {0 if result_df is None else len(result_df)} candidates",
-                    {"conditions": selected_conds, "sort_by": sort_by},
+                    {
+                        "conditions": selected_conds, "sort_by": sort_by,
+                        "universe_size": len(value_pool), "universe_source": pool_source,
+                        "universe_as_of": pool_as_of,
+                    },
                 )
 
             progress_bar.progress(1.0)
@@ -3413,7 +3646,7 @@ elif tab == "🎯 自动选股":
         m4.metric("筛选条件", f"{len(selected_conds) if selected_conds else '全部'}个")
 
         # 表格
-        st.dataframe(result, use_container_width=True)
+        st.dataframe(result, width="stretch")
 
         # 导出
         col_btn, _ = st.columns([1, 5])
@@ -3427,7 +3660,7 @@ elif tab == "🎯 自动选股":
             signal_df = signal_counts.reset_index()
             signal_df.columns = ["信号类型", "出现次数"]
             plot_signal_distribution(signal_counts)
-            st.dataframe(signal_df, use_container_width=True, hide_index=True)
+            st.dataframe(signal_df, width="stretch", hide_index=True)
 
         # 一键加入模拟盘
         st.markdown("### 后续行动")
@@ -3527,7 +3760,7 @@ elif tab == "💰 模拟盘交易":
                 "盈亏": fmt_yuan(pos.pnl),
                 "盈亏%": f"{pos.pnl_pct:.2f}%",
             })
-        st.dataframe(pd.DataFrame(pos_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(pos_data), width="stretch", hide_index=True)
     else:
         st.info("暂无持仓")
 
@@ -3586,7 +3819,7 @@ elif tab == "💰 模拟盘交易":
         log_df = pd.DataFrame(broker.trade_log)
         col_tb, col_btn = st.columns([4, 1])
         with col_tb:
-            st.dataframe(log_df, use_container_width=True, hide_index=True)
+            st.dataframe(log_df, width="stretch", hide_index=True)
         with col_btn:
             csv_download_link(log_df, "sim_trade_log.csv", "导出 CSV")
 
@@ -3635,29 +3868,70 @@ elif tab == "🤖 自动交易":
 
     # 股票池
     st.markdown("### 股票池")
-    default_pool = "600519, 000858, 002594"
+    pool_options = ["全市场A股"]
     if screener_codes:
-        default_pool = ", ".join(screener_codes[:10])
+        pool_options.append("选股结果")
+    pool_options.append("自定义代码")
+    pool_mode = st.radio("股票池范围", pool_options, horizontal=True, key="auto_pool_mode")
 
-    pool_input = st.text_area("股票代码(逗号分隔)", value=default_pool, height=80)
-    stock_pool = normalize_codes(pool_input)
+    universe_df = pd.DataFrame()
+    universe_source = ""
+    if pool_mode == "全市场A股":
+        universe_df = load_stock_list().copy()
+        universe_source = st.session_state.stock_list.attrs.get("source", "证券列表")
+        is_full_market = st.session_state.stock_list.attrs.get("is_full_market", False)
+        exclude_risk = st.checkbox("排除 ST / 退市整理", value=True, key="auto_exclude_risk")
+        if exclude_risk and "is_st" in universe_df.columns:
+            universe_df = universe_df[~universe_df["is_st"]].copy()
+        stock_pool = universe_df["code"].astype(str).str.zfill(6).tolist() if not universe_df.empty else []
+        if is_full_market:
+            st.success(f"全市场股票池已就绪 / {len(stock_pool):,} 只 / {universe_source}")
+        else:
+            st.warning(f"全市场源暂不可用，当前使用 {len(stock_pool)} 只备用样本 / {universe_source}")
+        if not universe_df.empty:
+            board_counts = universe_df.get("board", pd.Series(dtype=str)).value_counts()
+            st.caption(" · ".join(f"{board} {count:,}只" for board, count in board_counts.items()))
+            with st.expander("查看全市场股票池预览"):
+                preview_cols = [column for column in ["code", "name", "board"] if column in universe_df.columns]
+                st.dataframe(universe_df[preview_cols].head(300), width="stretch", hide_index=True)
+                st.caption(f"仅展示前 300 只；实际引擎使用全部 {len(stock_pool):,} 只。")
+    elif pool_mode == "选股结果":
+        stock_pool = list(dict.fromkeys(normalize_codes(",".join(screener_codes))))
+        st.success(f"已载入选股结果 / {len(stock_pool)} 只")
+    else:
+        default_pool = ", ".join(screener_codes[:10]) if screener_codes else "600519, 000858, 002594"
+        pool_input = st.text_area("股票代码(逗号分隔)", value=default_pool, height=80, key="auto_custom_pool")
+        stock_pool = list(dict.fromkeys(normalize_codes(pool_input)))
+        st.caption(f"自定义股票池 / {len(stock_pool)} 只")
 
     # 引擎参数
     st.markdown("### 引擎参数")
-    ec1, ec2, ec3 = st.columns(3)
+    ec1, ec2, ec3, ec4, ec5 = st.columns(5)
     with ec1:
         check_interval = st.number_input("检查间隔(秒)", value=60, min_value=10, max_value=3600)
     with ec2:
-        max_pos_pct = st.slider("单股最大仓位(%)", value=25, min_value=5, max_value=100) / 100
+        scan_batch_size = st.number_input("每轮扫描数量", value=120, min_value=20, max_value=500, step=20)
     with ec3:
+        scan_workers = st.slider("行情并发数", min_value=2, max_value=16, value=8)
+    with ec4:
+        max_pos_pct = st.slider("单股最大仓位(%)", value=25, min_value=5, max_value=100) / 100
+    with ec5:
         trade_time_only = st.checkbox("仅交易时段运行", value=True)
+
+    coverage_rounds = int(np.ceil(len(stock_pool) / max(scan_batch_size, 1))) if stock_pool else 0
+    estimated_minutes = coverage_rounds * check_interval / 60
+    if len(stock_pool) > scan_batch_size:
+        st.info(
+            f"全市场采用轮转分片：每轮 {scan_batch_size} 只，约 {coverage_rounds} 轮覆盖全部股票；"
+            f"按当前间隔理论约 {estimated_minutes:.0f} 分钟完成一轮全覆盖。"
+        )
 
     # 运行控制
     st.markdown("---")
     col_start, col_stop, col_once = st.columns(3)
 
     with col_start:
-        if st.button("启动引擎", type="primary"):
+        if st.button("启动引擎", type="primary", disabled=not stock_pool):
             if trade_mode == "模拟盘":
                 broker = SimBroker(state_file=os.path.join(os.path.dirname(__file__), "sim_account.json"))
             else:
@@ -3668,6 +3942,7 @@ elif tab == "🤖 自动交易":
                 broker=broker, strategy=auto_strategy,
                 stock_pool=stock_pool, check_interval=check_interval,
                 max_position_pct=max_pos_pct, trade_time_only=trade_time_only,
+                scan_batch_size=scan_batch_size, max_workers=scan_workers,
             )
 
             def on_update(sig):
@@ -3678,7 +3953,12 @@ elif tab == "🤖 自动交易":
             workspace.audit(
                 "ENGINE_START",
                 f"Started {trade_mode} engine for {len(stock_pool)} symbols",
-                {"strategy": auto_s_name, "pool": stock_pool, "max_position_pct": max_pos_pct},
+                {
+                    "strategy": auto_s_name, "pool_mode": pool_mode,
+                    "pool_size": len(stock_pool), "pool_sample": stock_pool[:20],
+                    "batch_size": scan_batch_size, "max_workers": scan_workers,
+                    "max_position_pct": max_pos_pct,
+                },
             )
             st.success("自动交易引擎已启动。")
 
@@ -3693,7 +3973,7 @@ elif tab == "🤖 自动交易":
                 st.warning("引擎未运行")
 
     with col_once:
-        if st.button("执行一次扫描"):
+        if st.button("执行一批扫描", disabled=not stock_pool):
             if trade_mode == "模拟盘":
                 broker = SimBroker(state_file=os.path.join(os.path.dirname(__file__), "sim_account.json"))
             else:
@@ -3703,12 +3983,17 @@ elif tab == "🤖 自动交易":
             temp_engine = LiveTradingEngine(
                 broker=broker, strategy=auto_strategy,
                 stock_pool=stock_pool, trade_time_only=False,
+                scan_batch_size=scan_batch_size, max_workers=scan_workers,
             )
             results = temp_engine.run_once()
             workspace.audit(
                 "ENGINE_SCAN",
-                f"Completed one-time scan for {len(stock_pool)} symbols",
-                {"strategy": auto_s_name, "pool": stock_pool},
+                f"Completed one scan batch from {len(stock_pool)} symbols",
+                {
+                    "strategy": auto_s_name, "pool_mode": pool_mode,
+                    "pool_size": len(stock_pool), "batch_size": len(results),
+                    "pool_sample": stock_pool[:20],
+                },
             )
             for r in results:
                 icon = "BUY" if r["signal"] == 1 else "SELL" if r["signal"] == -1 else "HOLD"
@@ -3718,7 +4003,10 @@ elif tab == "🤖 自动交易":
     st.markdown("### 引擎状态")
     if st.session_state.live_engine and st.session_state.live_engine.is_running:
         eng = st.session_state.live_engine
-        st.success(f"运行中 / 股票池 {len(eng.stock_pool)} 只 / 轮询间隔 {eng.check_interval}s")
+        st.success(
+            f"运行中 / 股票池 {len(eng.stock_pool):,} 只 / 每轮 {eng.scan_batch_size} 只 / "
+            f"并发 {eng.max_workers} / 轮询间隔 {eng.check_interval}s"
+        )
     else:
         st.info("引擎状态 / 未运行")
 
@@ -3726,7 +4014,7 @@ elif tab == "🤖 自动交易":
     st.markdown("### 信号日志")
     if st.session_state.engine_logs:
         log_df = pd.DataFrame(st.session_state.engine_logs)
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.dataframe(log_df, width="stretch", hide_index=True)
     else:
         st.info("暂无信号记录")
 
@@ -3737,13 +4025,13 @@ elif tab == "🤖 自动交易":
         if watch_rows:
             watch_df = pd.DataFrame(watch_rows)
             watch_df = watch_df.rename(columns={"code": "代码", "source": "来源", "added_at": "首次加入", "updated_at": "最近更新", "status": "状态"})
-            st.dataframe(watch_df, use_container_width=True, hide_index=True)
+            st.dataframe(watch_df, width="stretch", hide_index=True)
         else:
             st.info("关注池为空；可在自动选股页将候选标的一键加入。")
     with hub_snap:
         snapshot_rows = workspace.snapshots()
         if snapshot_rows:
-            st.dataframe(pd.DataFrame(snapshot_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(snapshot_rows), width="stretch", hide_index=True)
         else:
             st.info("暂无快照；完成一次策略回测后会自动创建。")
     with hub_audit:
@@ -3753,7 +4041,7 @@ elif tab == "🤖 自动交易":
                 {"时间": row.get("time"), "事件": row.get("event"), "说明": row.get("message")}
                 for row in activity_rows
             ])
-            st.dataframe(activity_df, use_container_width=True, hide_index=True)
+            st.dataframe(activity_df, width="stretch", hide_index=True)
         else:
             st.info("暂无执行活动。")
 
@@ -3846,6 +4134,8 @@ elif tab == "📋 使用说明":
     ui_micro_head("依赖包列表", "保留关键运行依赖，方便部署。")
     st.code("""
     baostock>=0.9.2    # A股历史数据
+    efinance>=0.5.8    # 东方财富行情兼容层
+    akshare>=1.12.0    # 多市场数据备用源
     pandas>=2.0.0      # 数据处理
     numpy>=1.24.0      # 数值计算
     plotly>=5.15.0     # 交互图表
@@ -3855,10 +4145,74 @@ elif tab == "📋 使用说明":
 
 
 # =============================================================
-# TAB 7: 关于
+# TAB 9: 数据源中心
+# =============================================================
+elif tab == "🧭 数据源中心":
+    ui_module_header(
+        "09", "数据源与 Skill 中心",
+        "由奶龙数据侦察员统一检查 efinance、腾讯证券、AKShare 与 BaoStock 的角色、可用性和回退顺序，并把外部研究 Skill 作为可审阅资源接入网站。",
+        "让每一次回测都能回答：数据从哪里来、是否真实、失败后走了哪条链路，以及两个来源是否相互印证。",
+        ["检测真实行情", "核对最新日期", "交叉验证收盘价", "记录实际来源"],
+        variant="data",
+    )
+
+    ui_note_banner(
+        "efinance 首选其同源的东方财富 K 线接口直连：绕过会阻塞的证券代码发现步骤，保留复权和 OHLCV 口径；"
+        "若上游拒绝连接，则自动进入腾讯真实行情兼容链路并明确标注，系统绝不以模拟行情冒充真实行情。"
+    )
+
+    with st.spinner("奶龙正在检查真实行情链路..."):
+        source_report = probe_market_sources()
+
+    source_cols = st.columns(3)
+    for column, source_name in zip(source_cols[:2], ["efinance", "腾讯证券"]):
+        item = source_report[source_name]
+        with column:
+            st.metric(source_name, "已连接" if item["ok"] else "不可用", f"{item['latency_ms']} ms")
+            if item["ok"]:
+                st.caption(f"{item['route']} · {item['rows']} 行 · 截至 {item['latest']}")
+            else:
+                st.error(item["route"])
+    with source_cols[2]:
+        difference = source_report.get("cross_check_bps")
+        st.metric("双源收盘价偏差", "—" if difference is None else f"{difference:.2f} bp")
+        st.caption("万华化学 600309 · 最近共同交易日 · 前复权口径")
+
+    ui_micro_head("数据供应矩阵", "首选源失败时按公开、真实、可审计的顺序回退，并在回测结果中保留逐资产来源。")
+    st.dataframe(pd.DataFrame([
+        {"来源": "efinance / 东方财富直连", "状态": "实时探测", "主要用途": "A股与ETF历史K线", "失败处理": "切换腾讯或BaoStock并显式标注"},
+        {"来源": "腾讯证券", "状态": "实时探测", "主要用途": "历史K线、Alpha2固定ETF池", "失败处理": "切换AKShare或efinance"},
+        {"来源": "AKShare", "状态": "已集成备用", "主要用途": "ETF与扩展市场数据", "失败处理": "切换腾讯或efinance"},
+        {"来源": "BaoStock", "状态": "已集成备用", "主要用途": "A股历史K线与证券列表", "失败处理": "返回明确错误，不生成假数据"},
+    ]), width="stretch", hide_index=True)
+
+    ui_micro_head("A股分析 Skill 入口", "将类似 efinance 的研究能力以资源卡形式接入；第三方 Skill 不会自动执行，安装前应审阅代码和权限。")
+    skill_left, skill_right = st.columns(2)
+    with skill_left:
+        st.markdown("""
+        #### China Stock Analysis Skill
+
+        面向 A 股基本面、技术面与市场信息分析，底层使用 AKShare。网站提供直达入口，便于继续扩展研究工作流。
+
+        [打开 China Stock Analysis Skill](https://www.skills.sh/sugarforever/01coder-agent-skills/china-stock-analysis)
+        """)
+    with skill_right:
+        st.markdown("""
+        #### 官方数据项目
+
+        优先核对官方项目文档与字段口径，再把接口用于策略和回测。
+
+        [efinance](https://github.com/Micro-sheep/efinance) · [AKShare](https://github.com/akfamily/akshare) · [BaoStock](http://baostock.com)
+        """)
+
+    st.caption("数据探测样本：万华化学 600309；状态缓存 5 分钟。页面只报告真实请求结果，不把‘已安装’等同于‘网络可用’。")
+
+
+# =============================================================
+# TAB 10: 关于
 # =============================================================
 elif tab == "ℹ️ 关于":
-    ui_module_header("08", "平台信息", "奶龙资本量化研究平台面向 A 股研究、策略验证、组合归因与交易流程演练，强调证据、风险与可复现性。", "清楚界定平台能做什么、依赖哪些数据与技术，以及哪些结论不能从历史样本直接外推。", ["研究定位", "能力边界", "技术架构", "免责声明"], variant="about")
+    ui_module_header("10", "平台信息", "奶龙资本量化研究平台面向 A 股研究、策略验证、组合归因与交易流程演练，强调证据、风险与可复现性。", "清楚界定平台能做什么、依赖哪些数据与技术，以及哪些结论不能从历史样本直接外推。", ["研究定位", "能力边界", "技术架构", "免责声明"], variant="about")
 
     col1, col2 = st.columns([2, 1])
 
@@ -3868,7 +4222,7 @@ elif tab == "ℹ️ 关于":
 
         **奶龙资本量化研究平台** 是一套面向 A 股市场的量化研究与交易验证框架，覆盖从数据获取、技术指标计算、策略回测、绩效分析到自动交易的完整链路。
 
-        系统以 **akshare** 为实时数据源，内置 **6 种策略类型**（MA5/20 金叉死叉、MACD、RSI、布林带、均线+ATR 止损止盈、均线+RSI 过滤），支持单股票回测和多股票组合回测，并配有自动选股引擎和模拟盘交易功能。
+        系统采用 **腾讯证券 + efinance/东方财富 + AKShare + BaoStock** 多源架构，内置经典技术策略、Alpha² 单资产实验室与 Alpha2 多资产防守引擎，支持单股票回测、多资产轮动、组合归因、自动选股和模拟盘交易。
 
         **设计理念**：让个人投资者能够快速验证交易想法，用数据驱动决策而非情绪驱动。
 
@@ -3877,7 +4231,7 @@ elif tab == "ℹ️ 关于":
         | 层级 | 技术 |
         |------|------|
         | 前端框架 | Streamlit |
-        | 数据获取 | akshare (实时), baostock (历史) |
+        | 数据获取 | 腾讯证券、efinance/东方财富、AKShare、BaoStock |
         | 数据处理 | pandas, numpy |
         | 技术指标 | 自研指标库 (MA/EMA/MACD/RSI/KDJ/BOLL/ATR/VWAP) |
         | 可视化 | plotly, 自定义图表组件 |
